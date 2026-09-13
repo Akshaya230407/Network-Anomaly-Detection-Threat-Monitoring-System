@@ -425,69 +425,75 @@ def get_anomaly_summary(
 
     elif dataset == "CIC-IDS2017":
 
-        df = load_cic_dataset().copy()
+            total_records = 0
+            normal_records = 0
+            anomalous_records = 0
+            anomaly_types = {}
 
+            # Process CIC files one at a time in chunks
+            for file in get_cic_files():
 
-        # Clean labels
-        df["Label"] = (
-            df["Label"]
-            .astype(str)
-            .str.strip()
-        )
+                for chunk in pd.read_csv(
+                    file,
+                    usecols=["Label"],
+                    chunksize=10000,
+                    low_memory=True
+                ):
 
+                    labels = (
+                        chunk["Label"]
+                        .astype(str)
+                        .str.strip()
+                        .str.upper()
+                    )
 
-        total_records = len(df)
+                    total_records += len(labels)
 
+                    normal_count = int(
+                        (labels == "BENIGN").sum()
+                    )
 
-        # BENIGN = normal traffic
-        normal_records = int(
-            (
-                df["Label"]
-                .str.upper()
-                == "BENIGN"
-            ).sum()
-        )
+                    normal_records += normal_count
 
+                    anomalous_records += (
+                        len(labels) - normal_count
+                    )
 
-        # Everything else = anomaly
-        anomalous_records = (
-            total_records
-            - normal_records
-        )
+                    # Count attack types
+                    attacks = labels[labels != "BENIGN"]
 
+                    counts = attacks.value_counts()
 
-        anomaly_percentage = round(
-            (
-                anomalous_records
-                / total_records
-            ) * 100,
-            2
-        ) if total_records > 0 else 0
+                    for attack_type, count in counts.items():
+                        anomaly_types[attack_type] = (
+                            anomaly_types.get(attack_type, 0)
+                            + int(count)
+                        )
 
+            anomaly_percentage = round(
+                (
+                    anomalous_records
+                    / total_records
+                ) * 100,
+                2
+            ) if total_records > 0 else 0
 
-        # Attack types
-        anomaly_types = (
-            df[
-                df["Label"]
-                .str.upper()
-                != "BENIGN"
-            ]["Label"]
-            .value_counts()
-            .head(10)
-            .to_dict()
-        )
+            anomaly_types = dict(
+                sorted(
+                    anomaly_types.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:10]
+            )
 
-
-        return {
-            "dataset": "CIC-IDS2017",
-            "total_records": total_records,
-            "normal_records": normal_records,
-            "anomalous_records": anomalous_records,
-            "anomaly_percentage": anomaly_percentage,
-            "anomaly_types": anomaly_types
-        }
-
-
+            return {
+                "dataset": "CIC-IDS2017",
+                "total_records": total_records,
+                "normal_records": normal_records,
+                "anomalous_records": anomalous_records,
+                "anomaly_percentage": anomaly_percentage,
+                "anomaly_types": anomaly_types
+            }
     # =====================================================
     # UNKNOWN DATASET
     # =====================================================
@@ -612,104 +618,66 @@ def get_security_alerts(
 
     elif dataset == "CIC-IDS2017":
 
-        df = load_cic_dataset().copy()
-
-
-        # Clean Label
-        df["Label"] = (
-            df["Label"]
-            .astype(str)
-            .str.strip()
-        )
-
-
-        # Only attack traffic
-        attacks = df[
-            df["Label"]
-            .str.upper()
-            != "BENIGN"
-        ].copy()
-
-
-        # Keep first 100 attacks
-        attacks = attacks.head(50)
-
-
         alerts = []
+        alert_id = 1
 
+        # Process CIC files one at a time
+        for file in get_cic_files():
 
-        for index, row in attacks.iterrows():
-
-            attack_type = str(
-                row.get(
-                    "Label",
-                    "Unknown"
-                )
-            )
-
-
-            attack_upper = (
-                attack_type.upper()
-            )
-
-
-            # Assign severity
-            if any(
-                word in attack_upper
-                for word in [
-                    "DDOS",
-                    "DOS",
-                    "BOT",
-                    "INFILTRATION"
-                ]
+            for chunk in pd.read_csv(
+                file,
+                usecols=["Label"],
+                chunksize=10000,
+                low_memory=True
             ):
 
-                severity = "Critical"
-
-
-            elif any(
-                word in attack_upper
-                for word in [
-                    "PORTSCAN",
-                    "BRUTE FORCE",
-                    "WEB ATTACK"
-                ]
-            ):
-
-                severity = "High"
-
-
-            else:
-
-                severity = "Medium"
-
-
-            alerts.append({
-
-                "id": int(index) + 1,
-
-                "severity": severity,
-
-                "attack_type": attack_type,
-
-                # CIC dataset does not provide
-                # IP addresses in the processed data
-                "srcip": "N/A",
-
-                "dstip": "N/A",
-
-                "proto": str(
-                    row.get(
-                        "Protocol",
-                        "Unknown"
-                    )
+                chunk["Label"] = (
+                    chunk["Label"]
+                    .astype(str)
+                    .str.strip()
                 )
 
-            })
+                attacks = chunk[
+                    chunk["Label"].str.upper() != "BENIGN"
+                ]
 
+                for index, row in attacks.iterrows():
+
+                    attack_type = str(row["Label"])
+
+                    if attack_type.upper() in [
+                        "DDOS",
+                        "DOS HULK",
+                        "DOS SLOWLORIS",
+                        "DOS SLOWHTTPTEST"
+                    ]:
+                        severity = "Critical"
+
+                    elif attack_type.upper() in [
+                        "PORTSCAN",
+                        "FTP-PATATOR",
+                        "BOT"
+                    ]:
+                        severity = "High"
+
+                    else:
+                        severity = "Medium"
+
+                    alerts.append({
+                        "id": alert_id,
+                        "severity": severity,
+                        "attack_type": attack_type,
+                        "srcip": "Unknown",
+                        "dstip": "Unknown",
+                        "proto": "Unknown"
+                    })
+
+                    alert_id += 1
+
+                    if len(alerts) >= 100:
+                        return alerts
 
         return alerts
-
 
     # =====================================================
     # UNKNOWN DATASET
