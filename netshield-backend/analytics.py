@@ -58,7 +58,6 @@ CIC_PROCESSED_FILES = list(
 # =========================================================
 
 def get_cic_files():
-
     files = [
         file
         for file in PROCESSED_DIR.glob("*_processed.csv")
@@ -71,28 +70,35 @@ def get_cic_files():
         )
 
     return files
-@lru_cache(maxsize=1)
-def load_cic_dataset():
 
+def load_cic_dataset():
     csv_files = get_cic_files()
 
     dataframes = []
 
+    required_columns = [
+        "Destination Port",
+        "Flow Duration",
+        "Total Fwd Packets",
+        "Total Backward Packets",
+        "Flow Bytes/s",
+        "Flow Packets/s",
+        "Label",
+        "label",
+    ]
+
     for file in csv_files:
-
         try:
-
             df = pd.read_csv(
                 file,
-                low_memory=False
+                usecols=required_columns,
+                low_memory=True
             )
 
             df.columns = df.columns.str.strip()
-
             dataframes.append(df)
 
         except Exception as e:
-
             print(f"Could not load {file.name}: {e}")
 
     if not dataframes:
