@@ -201,11 +201,11 @@ def get_network_traffic(
             )
 
         df = pd.read_csv(
-            UNSW_TRAIN_PATH,
-            low_memory=False
+            UNSW_PROCESSED_PATH,
+            nrows=limit
         )
 
-        print("MONITORING DATASET PATH:", UNSW_TRAIN_PATH)
+        print("MONITORING DATASET PATH:", UNSW_PROCESSED_PATH)
         print("UNSW MONITORING COLUMNS:")
         print(df.columns.tolist())
 
