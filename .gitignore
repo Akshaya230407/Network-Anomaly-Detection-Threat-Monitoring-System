@@ -22,6 +22,7 @@ netshield-backend/**/*.pyo
 netshield-backend/datasets/**
 !netshield-backend/datasets/processed/
 !netshield-backend/datasets/processed/unsw_preprocessor.joblib
+!netshield-backend/datasets/processed/UNSW_NB15_processed.csv
 # =========================
 # Trained ML Models
 # =========================
