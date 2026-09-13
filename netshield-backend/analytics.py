@@ -117,56 +117,84 @@ def get_unsw_summary():
             f"{UNSW_PROCESSED_PATH}"
         )
 
-    df = pd.read_csv(
-        UNSW_PROCESSED_PATH,
-        low_memory=False
-    )
+    # Process the dataset in chunks to stay within Render's 512 MB RAM limit
+    chunk_size = 10000
 
-    total_records = len(df)
+    total_records = 0
+    normal_traffic = 0
+    attack_traffic = 0
 
-    # Normal traffic
-    normal_traffic = int(
-        (df["label"] == 0).sum()
-    )
-
-    # Attack traffic
-    attack_traffic = int(
-        (df["label"] == 1).sum()
-    )
-
-    # Attack percentage
-    attack_percentage = round(
-        (attack_traffic / total_records) * 100,
-        2
-    ) if total_records > 0 else 0
-
-    # Attack types
     attack_types = {}
-
-    if "attack_cat" in df.columns:
-
-        attack_types = (
-            df[df["label"] == 1]["attack_cat"]
-            .astype(str)
-            .str.strip()
-            .value_counts()
-            .head(10)
-            .to_dict()
-        )
-
-    # Protocol distribution
     protocol_distribution = {}
 
-    if "proto" in df.columns:
+    for chunk in pd.read_csv(
+        UNSW_PROCESSED_PATH,
+        chunksize=chunk_size,
+        low_memory=False
+    ):
 
-        protocol_distribution = (
-            df["proto"]
-            .astype(str)
-            .str.strip()
-            .value_counts()
-            .head(10)
-            .to_dict()
+        total_records += len(chunk)
+
+        # Normal traffic
+        normal_traffic += int(
+            (chunk["label"] == 0).sum()
         )
+
+        # Attack traffic
+        attack_traffic += int(
+            (chunk["label"] == 1).sum()
+        )
+
+        # Attack types
+        if "attack_cat" in chunk.columns:
+
+            attacks = (
+                chunk.loc[chunk["label"] == 1, "attack_cat"]
+                .astype(str)
+                .str.strip()
+            )
+
+            for attack_type, count in attacks.value_counts().items():
+                attack_types[attack_type] = (
+                    attack_types.get(attack_type, 0) + int(count)
+                )
+
+        # Protocol distribution
+        if "proto" in chunk.columns:
+
+            protocols = (
+                chunk["proto"]
+                .astype(str)
+                .str.strip()
+            )
+
+            for protocol, count in protocols.value_counts().items():
+                protocol_distribution[protocol] = (
+                    protocol_distribution.get(protocol, 0) + int(count)
+                )
+
+    attack_percentage = (
+        round((attack_traffic / total_records) * 100, 2)
+        if total_records > 0
+        else 0
+    )
+
+    # Keep only the top 10 results
+    attack_types = dict(
+        sorted(
+            attack_types.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:10]
+    )
+
+    protocol_distribution = dict(
+        sorted(
+            protocol_distribution.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:10]
+    )
 
     return {
         "dataset": "UNSW-NB15",
