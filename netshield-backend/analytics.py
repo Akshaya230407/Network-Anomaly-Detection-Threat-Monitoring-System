@@ -295,9 +295,23 @@ def get_network_traffic(
         first_file = csv_files[0]
 
         df = pd.read_csv(
-            first_file,
-            low_memory=False
-        )
+                first_file,
+                usecols=[
+                    "Destination Port",
+                    "Flow Duration",
+                    "Total Fwd Packets",
+                    "Total Backward Packets",
+                    "Total Length of Fwd Packets",
+                    "Total Length of Bwd Packets",
+                    "Fwd Packet Length Mean",
+                    "Bwd Packet Length Mean",
+                    "Flow Bytes/s",
+                    "Flow Packets/s",
+                    "Label"
+                ],
+                nrows=limit,
+                low_memory=True
+            )
 
         # Clean column names
         df.columns = (
@@ -371,20 +385,42 @@ def get_anomaly_summary(
                 "Processed UNSW-NB15 dataset not found."
             )
 
-        df = pd.read_csv(
+        total_records = 0
+        normal_records = 0
+        anomalous_records = 0
+        anomaly_types = {}
+
+        # Process UNSW in chunks to keep Render memory usage low
+        for chunk in pd.read_csv(
             UNSW_PROCESSED_PATH,
-            low_memory=False
-        )
+            usecols=["label", "attack_cat"],
+            chunksize=10000,
+            low_memory=True
+        ):
 
-        total_records = len(df)
+            labels = chunk["label"]
 
-        normal_records = int(
-            (df["label"] == 0).sum()
-        )
+            total_records += len(labels)
 
-        anomalous_records = int(
-            (df["label"] == 1).sum()
-        )
+            normal_records += int(
+                (labels == 0).sum()
+            )
+
+            anomalous_records += int(
+                (labels == 1).sum()
+            )
+
+            attacks = chunk[
+                labels == 1
+            ]["attack_cat"].astype(str).str.strip()
+
+            counts = attacks.value_counts()
+
+            for attack_type, count in counts.items():
+                anomaly_types[attack_type] = (
+                    anomaly_types.get(attack_type, 0)
+                    + int(count)
+                )
 
         anomaly_percentage = round(
             (
@@ -394,20 +430,13 @@ def get_anomaly_summary(
             2
         ) if total_records > 0 else 0
 
-        anomaly_types = {}
-
-        if "attack_cat" in df.columns:
-
-            anomaly_types = (
-                df[
-                    df["label"] == 1
-                ]["attack_cat"]
-                .astype(str)
-                .str.strip()
-                .value_counts()
-                .head(10)
-                .to_dict()
-            )
+        anomaly_types = dict(
+            sorted(
+                anomaly_types.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:10]
+        )
 
         return {
             "dataset": "UNSW-NB15",
@@ -524,90 +553,89 @@ def get_security_alerts(
                 "Processed UNSW-NB15 dataset not found."
             )
 
-        df = pd.read_csv(
-            UNSW_PROCESSED_PATH,
-            low_memory=False
-        )
-
-
-        # Only attack traffic
-        attacks = df[
-            df["label"] == 1
-        ].copy()
-
-
-        # Keep first 100 attacks
-        attacks = attacks.head(100)
-
-
         alerts = []
 
+        # Process UNSW-NB15 in chunks to reduce memory usage
+        for chunk in pd.read_csv(
+            UNSW_PROCESSED_PATH,
+            usecols=[
+                "label",
+                "attack_cat",
+                "proto"
+            ],
+            chunksize=10000,
+            low_memory=True
+        ):
 
-        for index, row in attacks.iterrows():
+            # Only attack traffic
+            attacks = chunk[
+                chunk["label"] == 1
+            ]
 
-            attack_type = str(
-                row.get(
-                    "attack_cat",
-                    "Unknown"
-                )
-            )
+            for index, row in attacks.iterrows():
 
-
-            # Assign severity
-            if attack_type in [
-                "Generic",
-                "Exploits",
-                "DoS"
-            ]:
-
-                severity = "Critical"
-
-
-            elif attack_type in [
-                "Fuzzers",
-                "Backdoor",
-                "Shellcode"
-            ]:
-
-                severity = "High"
-
-
-            else:
-
-                severity = "Medium"
-
-
-            alerts.append({
-
-                "id": int(index) + 1,
-
-                "severity": severity,
-
-                "attack_type": attack_type,
-
-                "srcip": str(
+                attack_type = str(
                     row.get(
-                        "srcip",
-                        "Unknown"
-                    )
-                ),
-
-                "dstip": str(
-                    row.get(
-                        "dstip",
-                        "Unknown"
-                    )
-                ),
-
-                "proto": str(
-                    row.get(
-                        "proto",
+                        "attack_cat",
                         "Unknown"
                     )
                 )
 
-            })
+                # Assign severity
+                if attack_type in [
+                    "Generic",
+                    "Exploits",
+                    "DoS"
+                ]:
 
+                    severity = "Critical"
+
+                elif attack_type in [
+                    "Fuzzers",
+                    "Backdoor",
+                    "Shellcode"
+                ]:
+
+                    severity = "High"
+
+                else:
+
+                    severity = "Medium"
+
+                alerts.append({
+
+                    "id": len(alerts) + 1,
+
+                    "severity": severity,
+
+                    "attack_type": attack_type,
+
+                    "srcip": str(
+                        row.get(
+                            "srcip",
+                            "Unknown"
+                        )
+                    ),
+
+                    "dstip": str(
+                        row.get(
+                            "dstip",
+                            "Unknown"
+                        )
+                    ),
+
+                    "proto": str(
+                        row.get(
+                            "proto",
+                            "Unknown"
+                        )
+                    )
+
+                })
+
+                # Keep only the first 100 alerts
+                if len(alerts) >= 100:
+                    return alerts
 
         return alerts
 
@@ -696,38 +724,84 @@ def get_security_alerts(
 
 def get_cic_summary():
 
-    df = load_cic_dataset().copy()
+    total_records = 0
+    normal_traffic = 0
+    attack_traffic = 0
 
+    attack_types = {}
+    protocol_distribution = {}
 
-    # Clean Label column
-    df["Label"] = (
-        df["Label"]
-        .astype(str)
-        .str.strip()
-    )
+    # Process CIC files one at a time
+    for file in get_cic_files():
 
+        for chunk in pd.read_csv(
+            file,
+            usecols=[
+                "Label",
+                "Destination Port"
+            ],
+            chunksize=10000,
+            low_memory=True
+        ):
 
-    # =====================================================
-    # TRAFFIC COUNTS
-    # =====================================================
+            # Clean Label column
+            labels = (
+                chunk["Label"]
+                .astype(str)
+                .str.strip()
+            )
 
-    total_records = len(df)
+            total_records += len(labels)
 
+            # Normal traffic
+            normal_count = int(
+                (
+                    labels.str.upper()
+                    == "BENIGN"
+                ).sum()
+            )
 
-    normal_traffic = int(
-        (
-            df["Label"]
-            .str.upper()
-            == "BENIGN"
-        ).sum()
-    )
+            normal_traffic += normal_count
 
+            # Attack traffic
+            attack_traffic += (
+                len(labels)
+                - normal_count
+            )
 
-    attack_traffic = (
-        total_records
-        - normal_traffic
-    )
+            # Attack types
+            attacks = labels[
+                labels.str.upper()
+                != "BENIGN"
+            ]
 
+            counts = attacks.value_counts()
+
+            for attack_type, count in counts.items():
+
+                attack_types[attack_type] = (
+                    attack_types.get(
+                        attack_type,
+                        0
+                    )
+                    + int(count)
+                )
+
+            # Protocol / destination-port distribution
+            port_counts = (
+                chunk["Destination Port"]
+                .value_counts()
+            )
+
+            for port, count in port_counts.items():
+
+                protocol_distribution[port] = (
+                    protocol_distribution.get(
+                        port,
+                        0
+                    )
+                    + int(count)
+                )
 
     attack_percentage = round(
         (
@@ -737,43 +811,23 @@ def get_cic_summary():
         2
     ) if total_records > 0 else 0
 
-
-    # =====================================================
-    # ATTACK TYPES
-    # =====================================================
-
-    attack_types = (
-        df[
-            df["Label"]
-            .str.upper()
-            != "BENIGN"
-        ]["Label"]
-        .value_counts()
-        .head(10)
-        .to_dict()
+    # Keep top 10 attack types
+    attack_types = dict(
+        sorted(
+            attack_types.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:10]
     )
 
-
-    # =====================================================
-    # PROTOCOL DISTRIBUTION
-    # =====================================================
-
-    protocol_distribution = {}
-
-
-    if "Destination Port" in df.columns:
-
-        protocol_distribution = (
-            df["Destination Port"]
-            .value_counts()
-            .head(10)
-            .to_dict()
-        )
-
-
-    # =====================================================
-    # RETURN SUMMARY
-    # =====================================================
+    # Keep top 10 destination ports
+    protocol_distribution = dict(
+        sorted(
+            protocol_distribution.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:10]
+    )
 
     return {
 
@@ -800,78 +854,105 @@ def get_unsw_record(record_id):
             f"{UNSW_PROCESSED_PATH}"
         )
 
-    df = pd.read_csv(
+    # Read UNSW-NB15 in chunks to reduce memory usage
+    for chunk in pd.read_csv(
         UNSW_PROCESSED_PATH,
-        low_memory=False
+        chunksize=10000,
+        low_memory=True
+    ):
+
+        record = chunk[
+            chunk["id"] == record_id
+        ]
+
+        if record.empty:
+            continue
+
+        record = record.iloc[0]
+
+        # Remove target / attack category
+        excluded_columns = [
+            "label",
+            "attack_cat"
+        ]
+
+        model_data = {
+            column: record[column]
+            for column in chunk.columns
+            if column not in excluded_columns
+        }
+
+        # Convert NumPy values to normal Python values
+        for key, value in model_data.items():
+
+            if pd.isna(value):
+                model_data[key] = None
+
+            elif hasattr(value, "item"):
+                model_data[key] = value.item()
+
+        return model_data
+
+    raise ValueError(
+        f"UNSW-NB15 record with id {record_id} not found."
     )
 
-    record = df[df["id"] == record_id]
-
-    if record.empty:
-        raise ValueError(
-            f"UNSW-NB15 record with id {record_id} not found."
-        )
-
-    record = record.iloc[0]
-
-    # Remove target / attack category
-    excluded_columns = [
-        "label",
-        "attack_cat"
-    ]
-
-    model_data = {
-        column: record[column]
-        for column in df.columns
-        if column not in excluded_columns
-    }
-
-    # Convert NumPy values to normal Python values
-    for key, value in model_data.items():
-
-        if pd.isna(value):
-            model_data[key] = None
-
-        elif hasattr(value, "item"):
-            model_data[key] = value.item()
-
-    return model_data
-
 def get_cic_record(record_id):
-    df = load_cic_dataset().copy()
 
-    if df.empty:
-        raise ValueError(
-            "CIC-IDS2017 dataset is empty."
-        )
-
-    # CIC record_id uses the row position
-    if record_id < 0 or record_id >= len(df):
+    if record_id < 0:
         raise ValueError(
             f"CIC-IDS2017 record with id {record_id} not found."
         )
 
-    record = df.iloc[record_id]
+    current_index = 0
 
-    # Remove target columns
-    excluded_columns = [
-        "Label",
-        "label"
-    ]
+    # Process CIC files one at a time
+    for file in get_cic_files():
 
-    model_data = {
-        column: record[column]
-        for column in df.columns
-        if column not in excluded_columns
-    }
+        for chunk in pd.read_csv(
+            file,
+            chunksize=10000,
+            low_memory=True
+        ):
 
-    # Convert NumPy / pandas values to normal Python values
-    for key, value in model_data.items():
+            # Check whether the requested record
+            # exists inside this chunk
+            chunk_end = current_index + len(chunk)
 
-        if pd.isna(value):
-            model_data[key] = None
+            if current_index <= record_id < chunk_end:
 
-        elif hasattr(value, "item"):
-            model_data[key] = value.item()
+                local_index = (
+                    record_id - current_index
+                )
 
-    return model_data
+                record = chunk.iloc[local_index]
+
+                # Remove target columns
+                excluded_columns = [
+                    "Label",
+                    "label"
+                ]
+
+                model_data = {
+                    column: record[column]
+                    for column in chunk.columns
+                    if column not in excluded_columns
+                }
+
+                # Convert NumPy / pandas values
+                # to normal Python values
+                for key, value in model_data.items():
+
+                    if pd.isna(value):
+                        model_data[key] = None
+
+                    elif hasattr(value, "item"):
+                        model_data[key] = value.item()
+
+                return model_data
+
+            current_index = chunk_end
+
+    raise ValueError(
+        f"CIC-IDS2017 record with id {record_id} not found."
+    )
