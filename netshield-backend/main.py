@@ -582,6 +582,13 @@ def get_alerts(
     dataset: str = "UNSW-NB15",
     db: Session = Depends(get_db)
 ):
+
+    # CIC-IDS2017 alerts are generated directly
+    # from the dataset using memory-efficient chunking.
+    if dataset == "CIC-IDS2017":
+        return get_security_alerts(dataset)
+
+    # UNSW-NB15 continues using database alerts.
     alerts = (
         db.query(models.Alert)
         .filter(models.Alert.dataset == dataset)
