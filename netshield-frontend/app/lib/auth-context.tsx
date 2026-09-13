@@ -8,7 +8,7 @@ import {
   ReactNode,
 } from "react";
 
-export const API_BASE_URL = "https://network-anomaly-detection-threat-j8iv.onrender.com/";
+export const API_BASE_URL = "https://network-anomaly-detection-threat-j8iv.onrender.com";
 
 export type Role = "security_analyst" | "security_administrator";
 
